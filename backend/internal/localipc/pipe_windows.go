@@ -48,8 +48,28 @@ func newWindowsPipeConn(h windows.Handle, name string) net.Conn {
 	return &windowsPipeFileConn{file: os.NewFile(uintptr(h), name)}
 }
 
-func (c *windowsPipeFileConn) Read(b []byte) (int, error)         { return c.file.Read(b) }
-func (c *windowsPipeFileConn) Write(b []byte) (int, error)        { return c.file.Write(b) }
+// unwrapPipeDeadlineErr returns deadline errors unwrapped. os.File reports a
+// deadline as *fs.PathError, which does not implement net.Error; net/http's
+// background read then treats it as a client disconnect and cancels the
+// in-flight request context ("context canceled"). os.ErrDeadlineExceeded
+// itself is a net.Error timeout, which net/http handles as an aborted read.
+func unwrapPipeDeadlineErr(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, os.ErrDeadlineExceeded) {
+		return pathErr.Err
+	}
+	return err
+}
+
+func (c *windowsPipeFileConn) Read(b []byte) (int, error) {
+	n, err := c.file.Read(b)
+	return n, unwrapPipeDeadlineErr(err)
+}
+
+func (c *windowsPipeFileConn) Write(b []byte) (int, error) {
+	n, err := c.file.Write(b)
+	return n, unwrapPipeDeadlineErr(err)
+}
 func (c *windowsPipeFileConn) Close() error                       { return c.file.Close() }
 func (c *windowsPipeFileConn) SetDeadline(t time.Time) error      { return c.file.SetDeadline(t) }
 func (c *windowsPipeFileConn) SetReadDeadline(t time.Time) error  { return c.file.SetReadDeadline(t) }
